@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    name: Python ${{ matrix.python-version }} (no Lean — unit + verdict logic)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Unit tests
+        run: python -m pytest -q
+      - name: CLI smoke — translation
+        run: axiomprover translate examples/arithmetic.py
+      - name: CLI smoke — buggy examples must be refuted (exit 1)
+        run: |
+          set +e
+          axiomprover verify examples/buggy.py
+          code=$?
+          set -e
+          test "$code" -eq 1
+
+  lean:
+    name: Lean kernel (end-to-end verification)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install elan + pinned toolchain
+        run: |
+          curl -sSfL https://elan.lean-lang.org/elan-init.sh \
+            | sh -s -- -y --default-toolchain "$(cat lean/lean-toolchain)"
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Check reference Lean models
+        working-directory: lean
+        run: lake build
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: End-to-end kernel tests
+        run: python -m pytest -q tests/test_integration_lean.py -v
+      - name: Verify examples (must all be kernel-checked, exit 0)
+        run: axiomprover verify examples/arithmetic.py
+      - name: Limits examples stay UNKNOWN (exit 3, never VERIFIED)
+        run: |
+          set +e
+          axiomprover verify examples/limits.py --json | tee limits.json
+          code=$?
+          set -e
+          test "$code" -eq 3
+          ! grep -q '"VERIFIED"' limits.json
