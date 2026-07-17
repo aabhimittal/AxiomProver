@@ -39,7 +39,9 @@ def verify_file(
 ) -> list[FunctionReport]:
     path = Path(path)
     runner = runner or LeanRunner()
-    emit = Path(emit_dir) if emit_dir else path.parent / ".axiomprover"
+    # Resolve so every artifact path handed to the runner (which changes the
+    # subprocess cwd) and recorded in reports is unambiguous.
+    emit = (Path(emit_dir) if emit_dir else path.parent / ".axiomprover").resolve()
     targets = parse_file(path)
     return [
         verify_function(t, source_path=path, runner=runner, emit_dir=emit,

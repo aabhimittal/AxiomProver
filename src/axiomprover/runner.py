@@ -55,6 +55,9 @@ class LeanRunner:
         return proc.stdout.strip() or None
 
     def check(self, lean_file: Path) -> LeanResult:
+        # The subprocess runs with cwd=lean_file.parent, so a relative path
+        # would no longer point at the file once the cwd changes.
+        lean_file = Path(lean_file).resolve()
         if not self.available():
             raise LeanNotFoundError(
                 f"Lean executable {self.lean_bin!r} not found. Install elan "

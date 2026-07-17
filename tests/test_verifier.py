@@ -133,6 +133,37 @@ def ident(n: int) -> int:
     assert reports[0].verdict is Verdict.ERROR
 
 
+def test_relative_emit_dir_reaches_runner_as_absolute_path(tmp_path, monkeypatch):
+    # Regression: the runner invokes `lean` with cwd=lean_file.parent, so a
+    # relative artifact path (the CLI's default emit dir is relative to the
+    # source file) silently broke every kernel call and surfaced as UNKNOWN.
+    class PathCheckingRunner:
+        def __init__(self):
+            self.paths = []
+
+        def check(self, lean_file: Path) -> LeanResult:
+            self.paths.append(lean_file)
+            assert lean_file.is_absolute(), lean_file
+            assert lean_file.exists(), lean_file
+            return LeanResult(accepted=True, stdout="", stderr="")
+
+    src = tmp_path / "f.py"
+    src.write_text(
+        """
+from axiomprover import ensures
+
+@ensures(lambda n, result: result == n)
+def ident(n: int) -> int:
+    return n
+"""
+    )
+    monkeypatch.chdir(tmp_path)
+    runner = PathCheckingRunner()
+    reports = verify_file("f.py", runner=runner, emit_dir="out", falsify=False)
+    assert reports[0].verdict is Verdict.VERIFIED
+    assert runner.paths, "runner was never invoked"
+
+
 def test_limits_examples_are_unknown_under_rejecting_runner(tmp_path):
     reports = _by_name(
         verify_file(EXAMPLES / "limits.py", runner=RejectingRunner(), emit_dir=tmp_path)
