@@ -1,0 +1,6 @@
+name = "AxiomProver"
+version = "0.1.0"
+defaultTargets = ["AxiomProver"]
+
+[[lean_lib]]
+name = "AxiomProver"
