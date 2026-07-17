@@ -57,8 +57,9 @@ jobs:
       - name: Limits examples stay UNKNOWN (exit 3, never VERIFIED)
         run: |
           set +e
-          axiomprover verify examples/limits.py --json | tee limits.json
+          axiomprover verify examples/limits.py --json > limits.json
           code=$?
           set -e
+          cat limits.json
           test "$code" -eq 3
           ! grep -q '"VERIFIED"' limits.json
