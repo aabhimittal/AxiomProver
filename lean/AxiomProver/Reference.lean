@@ -29,7 +29,10 @@ def int_abs (n : Int) : Int :=
 theorem int_abs_spec_1 (n : Int) : ((int_abs n) ≥ 0) := by
   simp only [int_abs]; split <;> (try split) <;> (try split) <;> omega
 
--- double, with a precondition hypothesis and fmod in the goal
+-- double, with a precondition hypothesis and emod-by-literal in the goal
+-- (Python `% k` with a literal k >= 1 is modeled as Int.emod, which omega
+-- understands; Int.fmod is reserved for non-literal divisors and is beyond
+-- omega — see examples/limits.py)
 def double (n : Int) : Int :=
   (n + n)
 
@@ -37,7 +40,7 @@ theorem double_spec_1 (n : Int) (_h1 : (n ≥ 0)) : ((double n) ≥ n) := by
   simp only [double]; try omega
 
 theorem double_spec_2 (n : Int) (_h1 : (n ≥ 0)) :
-    ((Int.fmod (double n) 2) = 0) := by
+    ((Int.emod (double n) 2) = 0) := by
   simp only [double]; try omega
 
 -- Bool-valued result modeled via `decide`

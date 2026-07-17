@@ -93,31 +93,40 @@ def f(n: int) -> int:
     )
 
 
-def test_floor_division_maps_to_fdiv_not_div():
+def test_division_by_positive_literal_maps_to_euclidean():
+    # For a literal divisor >= 1, Python floor division/modulo coincide with
+    # Lean's Euclidean ediv/emod, which omega can reason about.
     module = translate(
         """
 from axiomprover import ensures
 
-@ensures(lambda n, result: result <= n)
-def half(n: int) -> int:
-    return n // 2
+@ensures(lambda n, result: result <= n or n < 0)
+def f(n: int) -> int:
+    x = n // 2
+    return x % 10
 """
     )
-    assert "Int.fdiv n 2" in module.definition
+    assert "Int.ediv n 2" in module.definition
+    assert "Int.emod (Int.ediv n 2) 10" in module.definition
     assert "n / 2" not in module.definition
 
 
-def test_modulo_maps_to_fmod():
+def test_division_by_variable_or_negative_literal_maps_to_floor():
+    # Floor and Euclidean division disagree for negative divisors, so the
+    # faithful (if automation-hostile) fdiv/fmod model is kept there.
     module = translate(
         """
-from axiomprover import ensures
+from axiomprover import ensures, requires
 
-@ensures(lambda n, result: result >= 0)
-def f(n: int) -> int:
-    return n % 10
+@requires(lambda a, b: b != 0)
+@ensures(lambda a, b, result: result == result)
+def f(a: int, b: int) -> int:
+    x = a // b
+    return x % -3
 """
     )
-    assert "Int.fmod n 10" in module.definition
+    assert "Int.fdiv a b" in module.definition
+    assert "Int.fmod (Int.fdiv a b) (-3)" in module.definition
 
 
 def test_bool_result_uses_decide():

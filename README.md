@@ -131,8 +131,8 @@ everything else** — a wrong model would be worse than no model.
 | `int` | `Int` | both unbounded: no overflow gap |
 | `bool` | `Bool` | |
 | `+ - *`, unary `-` | same on `Int` | |
-| `//` | `Int.fdiv` | both floor; Lean's `/` truncates — the obvious symbol would be a *wrong model* on negatives |
-| `%` | `Int.fmod` | both follow the divisor's sign |
+| `// k`, `% k` (literal `k ≥ 1`) | `Int.ediv`, `Int.emod` | floor and Euclidean division coincide for positive divisors, and `omega` can reason about ediv/emod by literals |
+| `//`, `%` (other divisors) | `Int.fdiv`, `Int.fmod` | floor-based like Python (Lean's naive `Int.div` truncates — the obvious model would be *wrong* on negatives); beyond `omega`, so expect `UNKNOWN`. Lean division is total (`x // 0 = 0`) where Python raises — the falsifier covers that gap by treating a raise on legal inputs as refutation |
 | comparisons (incl. chained) | `Prop` (or `decide (…)` as a value) | |
 | `if` / `elif` / `else` / ternary | `if _ then _ else _` | |
 | (re)assignment, `+=` … | inlined by substitution | body becomes one pure expression |

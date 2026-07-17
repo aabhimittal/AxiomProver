@@ -10,8 +10,13 @@ auditable:
   Python `int`        ->  Lean `Int` (both unbounded; no overflow gap)
   Python `bool`       ->  Lean `Bool`
   `+ - *` and unary - ->  the corresponding `Int` operations
-  `//`                ->  `Int.fdiv` (both floor toward -inf)
-  `%`                 ->  `Int.fmod` (both take the divisor's sign)
+  `// k`, `% k`       ->  `Int.ediv`/`Int.emod` when k is an integer literal
+                          >= 1 (floor and Euclidean division coincide for
+                          positive divisors, and `omega` can reason about
+                          ediv/emod by literals)
+  `//`, `%` otherwise ->  `Int.fdiv`/`Int.fmod` (floor-based, matching
+                          Python's semantics on negative divisors; usually
+                          beyond automation, so expect UNKNOWN)
   `if/elif/else`      ->  `if _ then _ else _` with a `Prop` condition
   assignments         ->  inlined by substitution (code is straight-line SSA
                           after inlining; no mutation survives translation)
@@ -21,10 +26,13 @@ auditable:
 Anything outside the subset raises `UnsupportedError` — the verifier reports
 the function as UNSUPPORTED rather than guessing at semantics. Notably `/`
 (true division, which produces floats) and `**` are rejected, as are loops,
-calls, and container types. Division notes: Python's `//`/`%` are
-floor-based, which matches Lean's `Int.fdiv`/`Int.fmod`, *not* Lean's `/`
-(`Int.div`, truncation) or `%` — using the obvious symbol would silently
-model the wrong function on negative operands.
+calls, and container types.
+
+Known modeling gap, by choice: Lean's division operators are total and
+return 0 on a zero divisor, while Python raises ZeroDivisionError. For
+literal divisors >= 1 the gap is unreachable; for variable divisors the
+falsifier treats a raise on contract-legal inputs as a refutation, which
+covers the gap whenever counterexample search is enabled (the default).
 """
 
 from __future__ import annotations
@@ -257,6 +265,16 @@ _CMPOPS = {
 }
 
 
+def _is_positive_literal(node: ast.expr) -> bool:
+    """True for an integer literal >= 1 (bools excluded)."""
+    return (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, int)
+        and not isinstance(node.value, bool)
+        and node.value >= 1
+    )
+
+
 def _term(node: ast.expr, env: dict[str, str], fn: TargetFunction) -> str:
     """Translate an expression in *value* position (Int or Bool)."""
     if isinstance(node, ast.Constant):
@@ -284,8 +302,12 @@ def _term(node: ast.expr, env: dict[str, str], fn: TargetFunction) -> str:
         if op_type in _BINOPS:
             return f"({left} {_BINOPS[op_type]} {right})"
         if op_type is ast.FloorDiv:
+            if _is_positive_literal(node.right):
+                return f"(Int.ediv {left} {right})"
             return f"(Int.fdiv {left} {right})"
         if op_type is ast.Mod:
+            if _is_positive_literal(node.right):
+                return f"(Int.emod {left} {right})"
             return f"(Int.fmod {left} {right})"
         if op_type is ast.Div:
             raise UnsupportedError(
