@@ -10,10 +10,12 @@ auditable:
   Python `int`        ->  Lean `Int` (both unbounded; no overflow gap)
   Python `bool`       ->  Lean `Bool`
   `+ - *` and unary - ->  the corresponding `Int` operations
-  `// k`, `% k`       ->  `Int.ediv`/`Int.emod` when k is an integer literal
-                          >= 1 (floor and Euclidean division coincide for
-                          positive divisors, and `omega` can reason about
-                          ediv/emod by literals)
+  `// k`, `% k`       ->  Lean's `/`/`%` (Int.ediv/Int.emod under the
+                          notation) when k is an integer literal >= 1:
+                          floor and Euclidean division coincide for positive
+                          divisors, and `omega` reasons about `/`/`%` by
+                          literals. Reference.lean pins the notation's
+                          semantics with kernel-checked examples.
   `//`, `%` otherwise ->  `Int.fdiv`/`Int.fmod` (floor-based, matching
                           Python's semantics on negative divisors; usually
                           beyond automation, so expect UNKNOWN)
@@ -301,13 +303,18 @@ def _term(node: ast.expr, env: dict[str, str], fn: TargetFunction) -> str:
         op_type = type(node.op)
         if op_type in _BINOPS:
             return f"({left} {_BINOPS[op_type]} {right})"
+        # Lean's `/`/`%` notation on Int is Euclidean division, which agrees
+        # with Python's floor division exactly when the divisor is positive
+        # (Reference.lean pins this with kernel-checked examples). We emit
+        # the notation, not raw Int.ediv/Int.emod: omega's frontend matches
+        # the HDiv/HMod applications and misses the bare constants.
         if op_type is ast.FloorDiv:
             if _is_positive_literal(node.right):
-                return f"(Int.ediv {left} {right})"
+                return f"({left} / {right})"
             return f"(Int.fdiv {left} {right})"
         if op_type is ast.Mod:
             if _is_positive_literal(node.right):
-                return f"(Int.emod {left} {right})"
+                return f"({left} % {right})"
             return f"(Int.fmod {left} {right})"
         if op_type is ast.Div:
             raise UnsupportedError(

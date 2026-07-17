@@ -93,9 +93,10 @@ def f(n: int) -> int:
     )
 
 
-def test_division_by_positive_literal_maps_to_euclidean():
+def test_division_by_positive_literal_uses_notation():
     # For a literal divisor >= 1, Python floor division/modulo coincide with
-    # Lean's Euclidean ediv/emod, which omega can reason about.
+    # Lean's Euclidean `/`/`%` notation on Int, which omega reasons about
+    # (raw Int.ediv/Int.emod constants are invisible to omega's frontend).
     module = translate(
         """
 from axiomprover import ensures
@@ -106,9 +107,9 @@ def f(n: int) -> int:
     return x % 10
 """
     )
-    assert "Int.ediv n 2" in module.definition
-    assert "Int.emod (Int.ediv n 2) 10" in module.definition
-    assert "n / 2" not in module.definition
+    assert "((n / 2) % 10)" in module.definition
+    assert "Int.ediv" not in module.definition
+    assert "Int.emod" not in module.definition
 
 
 def test_division_by_variable_or_negative_literal_maps_to_floor():
