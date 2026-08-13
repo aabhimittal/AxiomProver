@@ -15,7 +15,7 @@ from axiomprover.decorators import ensures, proof, requires
 from axiomprover.report import FunctionReport, Verdict
 from axiomprover.verifier import verify_file, verify_function
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "requires",

@@ -43,6 +43,10 @@ class TargetFunction:
     ensures: list[SpecClause] = field(default_factory=list)
     proof_hint: str | None = None
     lineno: int = 0
+    # Every top-level function in the module (contracted or not), so the
+    # translator can inline calls to sibling helpers. Helpers are validated
+    # lazily — only when a call to one is actually being translated.
+    helpers: dict[str, ast.FunctionDef] = field(default_factory=dict)
 
     @property
     def param_names(self) -> list[str]:
@@ -58,11 +62,15 @@ def parse_file(path: str | Path) -> list[TargetFunction]:
 
 def parse_source(source: str, filename: str = "<string>") -> list[TargetFunction]:
     tree = ast.parse(source, filename=filename)
+    helpers = {
+        node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
+    }
     targets = []
     for node in tree.body:
         if isinstance(node, ast.FunctionDef):
             target = _extract_function(node)
             if target is not None:
+                target.helpers = helpers
                 targets.append(target)
     return targets
 

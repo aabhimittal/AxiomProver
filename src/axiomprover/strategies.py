@@ -27,8 +27,24 @@ from __future__ import annotations
 
 from axiomprover.translator import LeanModule, lean_name
 
-_SPLIT3 = "split <;> (try split) <;> (try split)"
 _BOOL_LEMMAS = "decide_eq_true_eq, Bool.and_eq_true, Bool.or_eq_true"
+
+# Beyond this many nested if-then-else splits, case analysis is a lost cause
+# (2^16 leaves) — better to give an honest UNKNOWN quickly.
+_MAX_SPLIT_DEPTH = 16
+
+
+def _split_chain(depth: int) -> str:
+    """`split` chained through *depth* levels of nested ite; the `try` makes
+    shallower branches no-ops instead of failures."""
+    return "split" + " <;> (try split)" * max(depth - 1, 0)
+
+
+def _ite_depth(module: LeanModule) -> int:
+    """Upper bound on nested ite depth: every `if ` in the definition and
+    goals (sequential ifs become nested through continuation inlining)."""
+    text = module.definition + "".join(t.statement for t in module.theorems)
+    return min(text.count("if "), _MAX_SPLIT_DEPTH)
 
 
 def strategies_for(module: LeanModule) -> list[str]:
@@ -38,12 +54,26 @@ def strategies_for(module: LeanModule) -> list[str]:
     if module.proof_hint:
         chain.append(module.proof_hint)
 
+    depth = _ite_depth(module)
+    split3 = _split_chain(min(depth, 3) or 1)
     chain += [
         f"simp only [{f}]; try omega",
-        f"simp only [{f}]; {_SPLIT3} <;> omega",
+        f"simp only [{f}]; {split3} <;> omega",
         f"simp only [{f}, {_BOOL_LEMMAS}]; try omega",
-        f"simp only [{f}, {_BOOL_LEMMAS}]; {_SPLIT3} <;> omega",
+        f"simp only [{f}, {_BOOL_LEMMAS}]; {split3} <;> omega",
     ]
+    if depth > 3:
+        # Deep case analysis for unrolled loops and desugared min/max/abs.
+        chain += [
+            f"simp only [{f}]; {_split_chain(depth)} <;> omega",
+            f"simp only [{f}, {_BOOL_LEMMAS}]; {_split_chain(depth)} <;> omega",
+        ]
+    # Branchy Bool-valued goals leave equations like `true = decide p` that
+    # need the default simp set (hypothesis-aware) before omega can help.
+    chain.append(
+        f"simp only [{f}]; {_split_chain(max(depth, 1))} <;> (try simp_all) "
+        f"<;> (try omega)"
+    )
 
     if module.bool_params:
         cases = " <;> ".join(f"cases {lean_name(p)}" for p in module.bool_params)

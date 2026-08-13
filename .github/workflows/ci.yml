@@ -54,6 +54,15 @@ jobs:
         run: python -m pytest -q tests/test_integration_lean.py -v
       - name: Verify examples (must all be kernel-checked, exit 0)
         run: axiomprover verify examples/arithmetic.py
+      - name: Verify industrial examples (must all be kernel-checked, exit 0)
+        run: axiomprover verify examples/industrial.py
+      - name: Industrial buggy examples must be refuted (exit 1)
+        run: |
+          set +e
+          axiomprover verify examples/industrial_buggy.py
+          code=$?
+          set -e
+          test "$code" -eq 1
       - name: Limits examples stay UNKNOWN (exit 3, never VERIFIED)
         run: |
           set +e
