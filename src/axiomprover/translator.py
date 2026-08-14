@@ -25,10 +25,19 @@ auditable:
   contracts           ->  `Prop`s: `==` becomes `=`, `and`/`or`/`not` become
                           `∧`/`∨`/`¬`, bool-valued terms `b` become `b = true`
 
+  `min`/`max`/`abs`   ->  desugared to `if _ then _ else _` (usable in both
+                          code and contracts)
+  calls to module fns ->  inlined at the call site (sound for the acyclic
+                          case; recursion is detected and refused)
+  `for i in range(k)` ->  unrolled when the bounds are integer literals
+                          (up to MAX_UNROLL iterations); `return` inside the
+                          loop short-circuits later iterations exactly as in
+                          Python, `break`/`continue` are refused
+
 Anything outside the subset raises `UnsupportedError` — the verifier reports
 the function as UNSUPPORTED rather than guessing at semantics. Notably `/`
-(true division, which produces floats) and `**` are rejected, as are loops,
-calls, and container types.
+(true division, which produces floats) and `**` are rejected, as are
+unbounded loops, calls to functions outside the module, and container types.
 
 Known modeling gap, by choice: Lean's division operators are total and
 return 0 on a zero divisor, while Python raises ZeroDivisionError. For
@@ -57,6 +66,16 @@ _LEAN_RESERVED = {
 class UnsupportedError(Exception):
     """The construct is outside the verified subset. The message says which
     construct and where, so the user (or the generating model) can rewrite."""
+
+
+# Bounded-loop unrolling budget. Fixed-iteration loops (checksums, fixed
+# windows, unrolled kernels) fit comfortably; anything bigger deserves real
+# invariant reasoning, which this translator does not pretend to have.
+MAX_UNROLL = 64
+
+# Call-inlining stack for cycle detection. The translator is synchronous and
+# single-threaded; translate_function resets this on entry.
+_inline_stack: list[str] = []
 
 
 @dataclass
@@ -103,6 +122,8 @@ def lean_name(python_name: str) -> str:
 
 
 def translate_function(fn: TargetFunction) -> LeanModule:
+    _inline_stack.clear()
+    _inline_stack.append(fn.name)
     body_expr = _compile_statements(fn.body, {p: lean_name(p) for p in fn.param_names}, fn)
     binders = " ".join(
         f"({lean_name(name)} : {LEAN_TYPES[ty]})" for name, ty in fn.params
@@ -227,6 +248,9 @@ def _compile_statements(
         else_expr = _compile_statements(list(head.orelse) + rest, env, fn)
         return f"(if {cond} then {then_expr} else {else_expr})"
 
+    if isinstance(head, ast.For):
+        return _compile_statements(_unroll_for(head, fn) + rest, env, fn)
+
     if isinstance(head, ast.Pass):
         return _compile_statements(rest, env, fn)
 
@@ -238,6 +262,90 @@ def _compile_statements(
         f"{fn.name}: statement {type(head).__name__} at line {head.lineno} is "
         f"outside the supported subset (no loops, calls, or containers yet)"
     )
+
+
+def _unroll_for(loop: ast.For, fn: TargetFunction) -> list[ast.stmt]:
+    """Expand `for i in range(<literals>)` into straight-line statements.
+
+    Each iteration becomes `i = <value>` followed by a copy of the body, so
+    the existing statement compiler handles everything downstream — including
+    a `return` inside the loop, which short-circuits later iterations exactly
+    as in Python. After the loop the variable stays bound to the last value
+    (and stays unbound for an empty range), again matching Python.
+    """
+    if loop.orelse:
+        raise UnsupportedError(
+            f"{fn.name}: for/else is outside the subset (line {loop.lineno})"
+        )
+    if not isinstance(loop.target, ast.Name):
+        raise UnsupportedError(
+            f"{fn.name}: only a simple loop variable is supported "
+            f"(line {loop.lineno})"
+        )
+    for node in ast.walk(loop):
+        if isinstance(node, (ast.Break, ast.Continue)):
+            raise UnsupportedError(
+                f"{fn.name}: break/continue are outside the subset "
+                f"(line {node.lineno})"
+            )
+    values = _range_literal_values(loop.iter, fn)
+    if len(values) > MAX_UNROLL:
+        raise UnsupportedError(
+            f"{fn.name}: loop at line {loop.lineno} runs {len(values)} "
+            f"iterations; the unrolling budget is {MAX_UNROLL}"
+        )
+    unrolled: list[ast.stmt] = []
+    for value in values:
+        assign = ast.Assign(
+            targets=[ast.Name(id=loop.target.id, ctx=ast.Store())],
+            value=ast.Constant(value=value),
+        )
+        ast.copy_location(assign, loop)
+        ast.fix_missing_locations(assign)
+        unrolled.append(assign)
+        unrolled.extend(loop.body)
+    return unrolled
+
+
+def _range_literal_values(iter_node: ast.expr, fn: TargetFunction) -> list[int]:
+    if not (
+        isinstance(iter_node, ast.Call)
+        and isinstance(iter_node.func, ast.Name)
+        and iter_node.func.id == "range"
+        and not iter_node.keywords
+        and 1 <= len(iter_node.args) <= 3
+    ):
+        raise UnsupportedError(
+            f"{fn.name}: loops are only supported over range(...) with "
+            f"integer literal bounds (line {iter_node.lineno})"
+        )
+    bounds = []
+    for arg in iter_node.args:
+        value = _literal_int(arg)
+        if value is None:
+            raise UnsupportedError(
+                f"{fn.name}: range bound {ast.unparse(arg)!r} is not an "
+                f"integer literal; only fixed iteration counts can be "
+                f"unrolled (line {arg.lineno})"
+            )
+        bounds.append(value)
+    if len(bounds) == 3 and bounds[2] == 0:
+        raise UnsupportedError(f"{fn.name}: range step of 0 (line {iter_node.lineno})")
+    return list(range(*bounds))
+
+
+def _literal_int(node: ast.expr) -> int | None:
+    """The value of an integer literal, allowing a leading unary minus."""
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        inner = _literal_int(node.operand)
+        return None if inner is None else -inner
+    if (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, int)
+        and not isinstance(node.value, bool)
+    ):
+        return node.value
+    return None
 
 
 def _bool_vars(env: dict[str, str], fn: TargetFunction) -> set[str]:
@@ -350,10 +458,79 @@ def _term(node: ast.expr, env: dict[str, str], fn: TargetFunction) -> str:
         else_expr = _term(node.orelse, env, fn)
         return f"(if {cond} then {then_expr} else {else_expr})"
 
+    if isinstance(node, ast.Call):
+        return _call(node, env, fn)
+
     raise UnsupportedError(
         f"{fn.name}: expression {type(node).__name__} at line {node.lineno} "
         f"is outside the supported subset"
     )
+
+
+def _call(node: ast.Call, env: dict[str, str], fn: TargetFunction) -> str:
+    """Builtin desugaring (min/max/abs) and inlining of module functions."""
+    if not isinstance(node.func, ast.Name) or node.keywords:
+        raise UnsupportedError(
+            f"{fn.name}: only plain positional calls to named functions are "
+            f"supported (line {node.lineno})"
+        )
+    name = node.func.id
+    if name in env:
+        raise UnsupportedError(
+            f"{fn.name}: calling {name!r} which is shadowed by a local "
+            f"variable (line {node.lineno})"
+        )
+    args = [_term(arg, env, fn) for arg in node.args]
+
+    # Builtins are desugared to `ite`, mirroring their Python definitions.
+    # A module function of the same name deliberately takes precedence.
+    if name not in fn.helpers:
+        if name in ("min", "max") and len(args) >= 2:
+            op = "≤" if name == "min" else "≥"
+            acc = args[0]
+            for nxt in args[1:]:
+                acc = f"(if {acc} {op} {nxt} then {acc} else {nxt})"
+            return acc
+        if name == "abs" and len(args) == 1:
+            x = args[0]
+            return f"(if {x} < 0 then (-{x}) else {x})"
+        raise UnsupportedError(
+            f"{fn.name}: call to {name!r} at line {node.lineno} — not a "
+            f"module function, and not a supported builtin (min/max/abs)"
+        )
+
+    return _inline(fn.helpers[name], args, node, fn)
+
+
+def _inline(
+    helper: ast.FunctionDef, args: list[str], call: ast.Call, fn: TargetFunction
+) -> str:
+    """Substitute translated argument expressions for the helper's parameters
+    and compile its body in place. Sound because the subset is pure: argument
+    expressions have no effects, so call-by-name equals call-by-value."""
+    if helper.name in _inline_stack:
+        cycle = " -> ".join([*_inline_stack, helper.name])
+        raise UnsupportedError(
+            f"{fn.name}: recursive call chain {cycle} (line {call.lineno}); "
+            f"recursion is not yet in the verified subset"
+        )
+    params = helper.args
+    if params.posonlyargs or params.kwonlyargs or params.vararg or params.kwarg or params.defaults:
+        raise UnsupportedError(
+            f"{fn.name}: callee {helper.name!r} must take only plain "
+            f"positional parameters (line {call.lineno})"
+        )
+    if len(params.args) != len(args):
+        raise UnsupportedError(
+            f"{fn.name}: call to {helper.name!r} passes {len(args)} "
+            f"argument(s), expected {len(params.args)} (line {call.lineno})"
+        )
+    callee_env = {p.arg: arg for p, arg in zip(params.args, args)}
+    _inline_stack.append(helper.name)
+    try:
+        return _compile_statements(helper.body, callee_env, fn)
+    finally:
+        _inline_stack.pop()
 
 
 def _prop(

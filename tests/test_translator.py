@@ -206,10 +206,10 @@ def f(then: int) -> int:
     "body, message",
     [
         ("    while n > 0:\n        n -= 1\n    return n", "While"),
-        ("    return len(str(n))", "Call"),
+        ("    return len(str(n))", "not a module function"),
         ("    return n / 2", "float division"),
         ("    return [n]", "List"),
-        ("    for i in range(n):\n        pass\n    return n", "For"),
+        ("    for i in range(n):\n        pass\n    return n", "not an integer literal"),
     ],
 )
 def test_unsupported_constructs_rejected(body, message):

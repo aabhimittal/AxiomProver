@@ -32,6 +32,25 @@ def test_arithmetic_examples_all_verify(tmp_path):
         )
 
 
+def test_industrial_examples_all_verify(tmp_path):
+    reports = _by_name(
+        verify_file(EXAMPLES / "industrial.py", runner=runner, emit_dir=tmp_path)
+    )
+    for name, report in reports.items():
+        assert report.verdict is Verdict.VERIFIED, (
+            f"{name}: {report.verdict} — {report.detail}"
+        )
+
+
+def test_industrial_buggy_examples_all_refuted(tmp_path):
+    reports = _by_name(
+        verify_file(EXAMPLES / "industrial_buggy.py", runner=runner, emit_dir=tmp_path)
+    )
+    for name, report in reports.items():
+        assert report.verdict is Verdict.REFUTED, name
+        assert report.counterexample is not None, name
+
+
 def test_buggy_examples_all_refuted(tmp_path):
     reports = _by_name(
         verify_file(EXAMPLES / "buggy.py", runner=runner, emit_dir=tmp_path)

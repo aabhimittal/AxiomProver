@@ -137,12 +137,27 @@ everything else** — a wrong model would be worse than no model.
 | `if` / `elif` / `else` / ternary | `if _ then _ else _` | |
 | (re)assignment, `+=` … | inlined by substitution | body becomes one pure expression |
 | `and or not` in contracts | `∧ ∨ ¬` | |
+| `min` / `max` / `abs` | `if _ then _ else _` | desugared to their definitions; usable in code *and* contracts |
+| calls to module functions | inlined at the call site | sound for the acyclic case (the subset is pure, so call-by-name = call-by-value); recursion is detected and refused. Lets a spec say `result == reference_impl(...)` |
+| `for i in range(<literals>)` | unrolled straight-line code | up to 64 iterations; `return` inside the loop short-circuits exactly like Python; `break`/`continue` refused |
 
-Not yet: loops, recursion, calls, strings, floats, containers, exceptions.
+Not yet: unbounded/variable-bound loops, recursion, strings, floats,
+containers, exceptions.
 That's the honest cost of a small trusted translator; the subset is still
 enough for the dense little functions LLMs get subtly wrong (see
 `examples/buggy.py` — all three look plausible and all three are refuted
 with witnesses like `same_sign(0, 0)`).
+
+`examples/industrial.py` exercises the subset against production-shaped
+code: saturation arithmetic, modular wraparound (`hash_bucket` proves
+`n % 8 ∈ [0, 8)` for *all* `n`, including negatives — the C-port footgun),
+leap-year logic, fixed-window averaging, an unrolled 4-step LCG whose state
+bound the kernel re-establishes through every step, and branchless tricks
+proven equivalent to their reference implementations
+(`result == reference_min(a, b)` via call inlining).
+`examples/industrial_buggy.py` collects the matching bug classes — a
+one-sided saturation clamp, a percentage that meets refunds, a faithful
+port of C's truncating division — all refuted with witnesses.
 
 `examples/limits.py` shows the other honest edge: true contracts that
 automation can't prove (nonlinear arithmetic) stay `UNKNOWN`, and the tool
@@ -166,7 +181,8 @@ requires `examples/arithmetic.py` to come back fully `VERIFIED` — and
 
 - **Recursion** via structural recursion on `Nat`, with termination goals
   surfaced instead of hidden.
-- **Loops** as invariant-annotated folds (`@invariant(...)`).
+- **Unbounded loops** as invariant-annotated folds (`@invariant(...)`) —
+  literal-bounded loops are already handled by unrolling.
 - **LLM-in-the-loop proof repair**: feed the kernel's error back to a model
   to propose the next tactic — safe by construction, since every attempt is
   kernel-checked.
